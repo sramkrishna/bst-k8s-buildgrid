@@ -124,15 +124,16 @@ Manifests:
 
 - `argo/00-rbac.yaml` — ServiceAccount `workflow` + Role + RoleBinding
 - `argo/05-cache-pvc.yaml` — `bst-workflow-cache` PVC (100 GiB, RWO)
-- `argo/10-gnome-build.yaml` — the `gnome-build` `WorkflowTemplate`
-- `argo/example-smoke-workflow.yaml` — quick sanity (freedesktop-sdk git.bst)
-- `argo/example-live-image-workflow.yaml` — real gnomeos/live-image.bst
+- `argo/10-bst-build.yaml` — generic `bst-build` `WorkflowTemplate` (project-agnostic)
+- `gnome/smoke-workflow.yaml` — quick GNOME sanity (freedesktop-sdk git.bst)
+- `gnome/live-image-workflow.yaml` — full gnomeos/live-image.bst
+- `dakota/example-workflow.yaml` — Project Dakota starting point (untested)
 
 Fire a build:
 
 ```fish
-kubectl -n buildgrid create -f argo/example-smoke-workflow.yaml       # ~1-5 min
-kubectl -n buildgrid create -f argo/example-live-image-workflow.yaml  # ~10-15 min warm
+kubectl -n buildgrid create -f gnome/smoke-workflow.yaml       # ~1-5 min
+kubectl -n buildgrid create -f gnome/live-image-workflow.yaml  # ~10-15 min warm
 ```
 
 Inspect:
@@ -159,7 +160,7 @@ kubectl -n argo port-forward svc/argo-server 2746:2746 &
 Reload the WorkflowTemplate after editing:
 
 ```fish
-kubectl apply -f argo/10-gnome-build.yaml
+kubectl apply -f argo/10-bst-build.yaml
 ```
 
 Concurrency: currently **one workflow at a time** — `bst-workflow-cache` is RWO.
@@ -337,7 +338,7 @@ For when you tear it all down and want to put it back:
 5. Workers: `50-workers.yaml` (needs `privileged: true` in cluster PSP/PSA)
 6. MinIO: `runner/07-minio.yaml`
 7. bst-runner image: `podman build -t fast-sfp1:30500/bst-runner:v6 runner/` + push
-8. Argo: install from official manifest, then apply `argo/00-rbac.yaml`, `argo/05-cache-pvc.yaml`, `argo/10-gnome-build.yaml`
+8. Argo: install from official manifest, then apply `argo/00-rbac.yaml`, `argo/05-cache-pvc.yaml`, `argo/10-bst-build.yaml`. Then apply per-project workflows from `gnome/`, `dakota/`, etc. as needed.
 9. Monitoring: `helm install monitoring prometheus-community/kube-prometheus-stack -n monitoring --create-namespace`
 10. Watcher: copy `~/.local/bin/bst-wf-watcher` + `~/.config/systemd/user/bst-wf-watcher.service`, then `systemctl --user enable --now bst-wf-watcher`
 

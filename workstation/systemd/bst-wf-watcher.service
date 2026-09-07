@@ -1,0 +1,24 @@
+[Unit]
+Description=Watch Argo Workflows and push ntfy on completion
+Documentation=file://%h/.local/bin/bst-wf-watcher
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/bst-wf-watcher
+# `Restart=always`, not `on-failure`: `kubectl --watch` exits cleanly (0) when
+# the k8s API server closes the watch stream after ~30-60 min. `on-failure`
+# would leave us silently un-restarted; `always` reconnects.
+Restart=always
+RestartSec=5
+
+# Systemd creates %h/.local/state/bst-wf-watcher/ and exports STATE_DIRECTORY.
+StateDirectory=bst-wf-watcher
+
+# kubectl (Linuxbrew) and jq (system) need to be reachable.
+Environment=PATH=/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin:%h/.local/bin
+# kubectl reads ~/.kube/config by default; HOME is already set for user units.
+
+[Install]
+WantedBy=default.target

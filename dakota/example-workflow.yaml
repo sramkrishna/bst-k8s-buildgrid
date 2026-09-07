@@ -1,0 +1,24 @@
+# Example Workflow that invokes the generic bst-build template with Project
+# Dakota arguments. UNTESTED — provided as a starting point. Confirm the
+# `target` element name against the current dakota.git repo layout before
+# firing (bootc-image producing elements live under `images/` in the tree
+# at time of writing).
+#
+# Apply with:
+#   kubectl -n buildgrid create -f dakota/example-workflow.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: dakota-
+  namespace: buildgrid
+spec:
+  workflowTemplateRef:
+    name: bst-build
+  arguments:
+    parameters:
+      - name: repo
+        value: https://github.com/projectbluefin/dakota.git
+      - name: ref
+        value: main
+      - name: target
+        value: images/dakota.bst   # VERIFY against the current dakota tree

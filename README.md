@@ -20,14 +20,22 @@ Verified end-to-end on a 4-node kubeadm cluster building GNOME OS
 ## Layout
 
 ```
-k8s/          BuildGrid + Postgres + workers, numbered by apply order
+k8s/          BuildGrid + Postgres + workers + registry (numbered apply order)
 runner/       bst-runner image + MinIO + Job template for fish-helper builds
-argo/         Argo WorkflowTemplate + RBAC + example invocations
+argo/         Argo RBAC, PVC, and the generic `bst-build` WorkflowTemplate
+
+gnome/        GNOME OS example Workflows (invoke bst-build with GNOME args)
+dakota/       Project Dakota example Workflow (invoke bst-build with Dakota args)
+workstation/  Client-side helpers — ntfy watcher script + systemd unit
+
 client/       sample bst 2.x user config to copy to ~/.config/
 example/      minimal smoke-test BuildStream project
-CHEATSHEET.md      day-to-day operations reference
-GNOME-OS-JOURNAL.md  chronological log of what broke and why during buildout
+CHEATSHEET.md         day-to-day operations reference
+GNOME-OS-JOURNAL.md   chronological log of what broke and why during buildout
 ```
+
+`gnome/`, `dakota/`, and `workstation/` are independent — install any
+subset. The core (`k8s/`, `argo/`) is what everything else builds on top of.
 
 ## Upstream projects consumed (not forked)
 
@@ -93,6 +101,8 @@ kubectl -n buildgrid rollout status deploy/buildgrid
 
 kubectl apply -f k8s/50-workers.yaml
 kubectl -n buildgrid rollout status deploy/worker
+
+kubectl apply -f k8s/70-registry.yaml    # in-cluster image registry for bst-runner
 ```
 
 Verify a worker registered:
@@ -149,14 +159,18 @@ kubectl apply -n argo -f \
 
 kubectl apply -f argo/00-rbac.yaml
 kubectl apply -f argo/05-cache-pvc.yaml
-kubectl apply -f argo/10-gnome-build.yaml
+kubectl apply -f argo/10-bst-build.yaml
 ```
 
-Fire a build:
+Fire a build (using a GNOME example):
 
 ```bash
-kubectl -n buildgrid create -f argo/example-smoke-workflow.yaml
+kubectl -n buildgrid create -f gnome/smoke-workflow.yaml       # small target
+kubectl -n buildgrid create -f gnome/live-image-workflow.yaml  # full ISO
 ```
+
+For Dakota builds see `dakota/`. For any other BuildStream project, copy
+one of the example Workflow manifests and change `repo`, `ref`, `target`.
 
 ### 5. (Optional) MinIO for artifact storage
 
@@ -188,9 +202,10 @@ Import Grafana dashboards 1860 (Node Exporter Full) and 15760 (K8s cluster).
 ### 7. (Optional) Workstation ntfy watcher
 
 A small systemd `--user` unit that watches your Argo workflows and pushes
-[ntfy.sh](https://ntfy.sh/) notifications on completion. Not in this repo
-because it's workstation-local, not cluster; see `CHEATSHEET.md` section 7
-for the script + unit file to copy into place.
+[ntfy.sh](https://ntfy.sh/) notifications on completion. Runs on your
+laptop, not the cluster (nodes aren't on your Tailscale, so pods can't
+reach a personal ntfy IP). See `workstation/README.md` for install +
+configuration.
 
 ## Why these specific choices
 

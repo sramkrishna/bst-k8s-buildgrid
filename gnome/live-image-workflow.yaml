@@ -1,0 +1,22 @@
+# Full GNOME OS live-image build — produces a bootable disk.iso under
+# `artifacts/runs/gnome-os-<random>/` in MinIO. Wall time roughly 10-20 min
+# once BuildGrid's CAS is warm (much longer cold).
+#
+# Apply with:
+#   kubectl -n buildgrid create -f gnome/live-image-workflow.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: gnome-os-
+  namespace: buildgrid
+spec:
+  workflowTemplateRef:
+    name: bst-build
+  arguments:
+    parameters:
+      - name: repo
+        value: https://gitlab.gnome.org/GNOME/gnome-build-meta.git
+      - name: ref
+        value: master
+      - name: target
+        value: gnomeos/live-image.bst

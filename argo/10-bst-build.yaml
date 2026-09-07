@@ -1,29 +1,28 @@
-# Reusable WorkflowTemplate for a gnome-build-meta build.
-# Adapted from projectbluefin/lab's dakota-build-pipeline, retargeted at
-# our BuildGrid backend + our custom bst-runner image + MinIO for artifacts.
+# Reusable, project-agnostic WorkflowTemplate for driving a BuildStream
+# build against the cluster's BuildGrid. Adapted from projectbluefin/lab's
+# dakota-build-pipeline; consumed by both `gnome/` and `dakota/` example
+# workflows (and anything else you want to plug in).
 #
-# Invoke with (from CLI):
-#   argo -n buildgrid submit --from workflowtemplate/gnome-build \
-#        -p target=gnomeos/live-image.bst \
-#        -p ref=master
+# Callers must supply at minimum: `repo`, `ref`, `target`. See the example
+# workflows under gnome/ and dakota/ for two ready-to-fire invocations.
 #
-# Or via kubectl (no argo CLI needed):
+# Invoke via kubectl:
 #   kubectl -n buildgrid create -f - <<EOF
 #   apiVersion: argoproj.io/v1alpha1
 #   kind: Workflow
-#   metadata:
-#     generateName: gnome-build-
+#   metadata: { generateName: my-build- }
 #   spec:
-#     workflowTemplateRef: { name: gnome-build }
+#     workflowTemplateRef: { name: bst-build }
 #     arguments:
 #       parameters:
-#         - { name: target, value: gnomeos/live-image.bst }
-#         - { name: ref,    value: master }
+#         - { name: repo,   value: https://my-forge/foo/bar.git }
+#         - { name: ref,    value: main }
+#         - { name: target, value: some/element.bst }
 #   EOF
 apiVersion: argoproj.io/v1alpha1
 kind: WorkflowTemplate
 metadata:
-  name: gnome-build
+  name: bst-build
   namespace: buildgrid
 spec:
   serviceAccountName: workflow
@@ -33,12 +32,13 @@ spec:
     secondsAfterCompletion: 86400         # keep 24h for post-mortems
   arguments:
     parameters:
-      - name: repo
-        value: "https://gitlab.gnome.org/GNOME/gnome-build-meta.git"
-      - name: ref
-        value: "master"
-      - name: target
-        value: "gnomeos/live-image.bst"
+      # Project-specific — override in the caller Workflow. Empty defaults
+      # so a misconfigured invocation fails fast instead of building the
+      # wrong thing.
+      - { name: repo,   value: "" }
+      - { name: ref,    value: "" }
+      - { name: target, value: "" }
+      # Infrastructure defaults — usually fine to leave as-is.
       - name: runner-image
         value: "fast-sfp1:30500/bst-runner:v6"
       - name: minio-endpoint

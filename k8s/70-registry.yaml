@@ -1,0 +1,62 @@
+# In-cluster container registry, used to push the bst-runner image so the
+# worker/runner pods can pull it without needing an external registry
+# account. Insecure by default (plain HTTP on NodePort 30500) — good for
+# a homelab, wrap in TLS + auth if you expose it outside your LAN.
+#
+# Push flow (on any workstation with podman/docker + registry-in-PATH):
+#   podman build -t fast-sfp1:30500/bst-runner:v6 runner/
+#   podman push  fast-sfp1:30500/bst-runner:v6
+# then re-`kubectl apply` any Deployment that references that tag, or
+# `kubectl rollout restart` to make pods pick it up.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: registry-storage
+  namespace: buildgrid
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 50Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: registry
+  namespace: buildgrid
+  labels: { app: registry }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: registry } }
+  template:
+    metadata: { labels: { app: registry } }
+    spec:
+      containers:
+        - name: registry
+          image: registry:2
+          env:
+            - name: REGISTRY_STORAGE_DELETE_ENABLED
+              value: "true"
+          ports:
+            - { containerPort: 5000 }
+          readinessProbe:
+            httpGet: { path: /, port: 5000 }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/registry }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: registry-storage }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: registry
+  namespace: buildgrid
+spec:
+  type: NodePort
+  selector: { app: registry }
+  ports:
+    - { name: http, port: 5000, targetPort: 5000, nodePort: 30500 }

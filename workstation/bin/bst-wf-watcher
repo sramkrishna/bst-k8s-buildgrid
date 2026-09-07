@@ -1,0 +1,99 @@
+#!/bin/bash
+# Watch Argo Workflows in the buildgrid namespace and push ntfy on completion.
+# Runs under systemd --user (bst-wf-watcher.service).
+#
+# Design:
+#   - Seed the "already-notified" set with every workflow that is *already*
+#     in a terminal phase at startup — so a service restart doesn't spam.
+#   - Then stream new events via `kubectl get wf --watch-only` and notify on
+#     Succeeded / Failed / Error transitions, deduping on (name, phase).
+#   - State file lives under $STATE_DIRECTORY (systemd's StateDirectory=),
+#     which resolves to ~/.local/state/bst-wf-watcher/ for a user unit.
+set -euo pipefail
+
+NAMESPACE="${NAMESPACE:-buildgrid}"
+NTFY_URL="${NTFY_URL:-http://100.106.218.95:2586/gnome_os_notify}"
+MINIO_BASE="${MINIO_BASE:-http://192.168.88.11:30900/artifacts/runs}"
+STATE_DIR="${STATE_DIRECTORY:-$HOME/.local/state/bst-wf-watcher}"
+SEEN="$STATE_DIR/notified"
+
+mkdir -p "$STATE_DIR"
+touch "$SEEN"
+
+notify() {
+    local name="$1" phase="$2" started="$3" finished="$4"
+    local emoji prio hms t0 t1 dur
+    case "$phase" in
+        Succeeded) emoji="OK";   prio="default" ;;
+        *)         emoji="FAIL"; prio="high"    ;;
+    esac
+    if [ -n "$started" ] && [ -n "$finished" ]; then
+        t0=$(date -d "$started"  +%s 2>/dev/null || echo 0)
+        t1=$(date -d "$finished" +%s 2>/dev/null || echo 0)
+        dur=$(( t1 - t0 ))
+        hms=$(printf '%dh%02dm%02ds' \
+            $((dur/3600)) $(((dur/60)%60)) $((dur%60)))
+    else
+        hms="?"
+    fi
+    local msg="$name $phase in $hms
+artifacts: $MINIO_BASE/$name/"
+    curl -sS --connect-timeout 3 --max-time 10 \
+        -H "Title: argo $emoji" \
+        -H "Priority: $prio" \
+        -H "Tags: hammer,gnome" \
+        -d "$msg" \
+        "$NTFY_URL" >/dev/null || true
+}
+
+# Seed / catch-up.
+# On the very first run (empty state file), silently seed the notified set
+# with every currently-terminal workflow — we don't want to page for old
+# completions on install.
+# On a restart (state file non-empty), FIRE ntfy for any terminal workflow
+# we haven't seen — this catches events we missed while the service was
+# down (e.g. kubectl's watch stream expired and we hadn't reconnected yet,
+# or the machine was rebooted). Argo's ttlStrategy caps the catch-up
+# window at whatever `secondsAfterCompletion` is set to (24h in our case),
+# so this can't produce an unbounded ntfy flood.
+catch_up=false
+[ -s "$SEEN" ] && catch_up=true
+
+while IFS=$'\t' read -r name phase started finished; do
+    case "$phase" in
+        Succeeded|Failed|Error) ;;
+        *) continue ;;
+    esac
+    if grep -qxF "$name:$phase" "$SEEN"; then continue; fi
+    echo "$name:$phase" >> "$SEEN"
+    if $catch_up; then
+        notify "$name" "$phase" "$started" "$finished"
+    fi
+done < <(kubectl -n "$NAMESPACE" get wf -o json 2>/dev/null | jq -r '
+    .items[]? | [
+        .metadata.name,
+        (.status.phase      // ""),
+        (.status.startedAt  // ""),
+        (.status.finishedAt // "")
+    ] | @tsv')
+
+# Stream: watch for new events. --watch-only skips the initial list dump.
+# `kubectl get -o json --watch` emits one JSON object per event, which jq
+# handles natively (concatenated-JSON input).
+exec kubectl -n "$NAMESPACE" get wf --watch-only -o json 2>/dev/null \
+    | jq --unbuffered -r '[
+          .metadata.name,
+          (.status.phase      // ""),
+          (.status.startedAt  // ""),
+          (.status.finishedAt // "")
+        ] | @tsv' \
+    | while IFS=$'\t' read -r name phase started finished; do
+        case "$phase" in
+            Succeeded|Failed|Error) ;;
+            *) continue ;;
+        esac
+        key="$name:$phase"
+        if grep -qxF "$key" "$SEEN"; then continue; fi
+        echo "$key" >> "$SEEN"
+        notify "$name" "$phase" "$started" "$finished"
+    done

@@ -1,0 +1,22 @@
+# Smoke-test Workflow — builds one small element from freedesktop-sdk.bst
+# (which gnome-build-meta junctions in). Useful for proving the pipeline
+# without waiting for a full ISO. Wall time ~1-5 min once the cache is warm.
+#
+# Apply with:
+#   kubectl -n buildgrid create -f gnome/smoke-workflow.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: gnome-smoke-
+  namespace: buildgrid
+spec:
+  workflowTemplateRef:
+    name: bst-build
+  arguments:
+    parameters:
+      - name: repo
+        value: https://gitlab.gnome.org/GNOME/gnome-build-meta.git
+      - name: ref
+        value: master
+      - name: target
+        value: freedesktop-sdk.bst:components/git.bst
