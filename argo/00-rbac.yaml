@@ -1,0 +1,38 @@
+# RBAC so Argo can run workflows in the buildgrid namespace
+# (Argo Workflows install created the argo service account only inside
+# the argo namespace).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: workflow
+  namespace: buildgrid
+---
+# Argo's WorkflowTaskResults CRD needs the workflow pod to patch its own
+# status. The stock argo-role covers this — bind it to our SA in buildgrid.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: workflow
+  namespace: buildgrid
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflowtaskresults"]
+    verbs: ["create", "patch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["minio-root"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: workflow
+  namespace: buildgrid
+subjects:
+  - kind: ServiceAccount
+    name: workflow
+    namespace: buildgrid
+roleRef:
+  kind: Role
+  name: workflow
+  apiGroup: rbac.authorization.k8s.io

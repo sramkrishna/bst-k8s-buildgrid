@@ -1,0 +1,74 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bgd-config
+  namespace: buildgrid
+data:
+  controller.yml: |
+    server:
+      - !channel
+        address: "[::]:50051"
+        insecure-mode: true
+
+    description: BuildGrid for BuildStream remote execution.
+
+    authorization:
+      method: none
+
+    monitoring:
+      enabled: false
+
+    connections:
+      - !sql-connection &sql
+        connection-string: postgresql://bgd:insecure@database/bgd
+        pool-size: 5
+        pool-timeout: 30
+        max-overflow: 10
+
+    storages:
+      # Persistent disk CAS (backed by PVC mounted at /var/lib/buildgrid/store).
+      # For a real workload like GNOME OS, the LRU in-memory store is
+      # inadequate — blobs evict too fast and warm cache resets on pod restart.
+      - !disk-storage &cas-storage
+        path: /var/lib/buildgrid/store
+
+    caches:
+      - !lru-action-cache &build-cache
+        storage: *cas-storage
+        max-cached-refs: 16384
+        cache-failed-actions: true
+        allow-updates: true
+
+    schedulers:
+      - !sql-scheduler &state-database
+        sql: *sql
+        storage: *cas-storage
+        action-cache: *build-cache
+        max-execution-timeout: 21600           # 6h — big GNOME actions
+        # gnome-build-meta sends `remoteApisSocketPath` as a platform property
+        # (project.conf's sandbox.remote-apis-socket, for the recc integration).
+        # Without whitelisting, actions get FAILED_PRECONDITION.
+        property-set: !dynamic-property-set
+          wildcard-property-keys:
+            - remoteApisSocketPath
+
+    instances:
+      - name: ''
+        description: The unique '' instance.
+
+        services:
+          - !action-cache
+            cache: *build-cache
+          - !execution
+            scheduler: *state-database
+          - !cas
+            storage: *cas-storage
+          - !bytestream
+            storage: *cas-storage
+          - !bots
+            scheduler: *state-database
+
+    # Bumped from 100 default — 48 workers × several concurrent RPCs each
+    # during peak staging saturates the 100-thread pool and clients get
+    # "Concurrent RPC limit exceeded!".
+    thread-pool-size: 1000

@@ -1,0 +1,13 @@
+# Persistent bst client cache — survives Job pod restarts and is reused
+# by every subsequent Job. Populates on first run; near-zero read time
+# afterward.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: bst-runner-cache
+  namespace: buildgrid
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 100Gi

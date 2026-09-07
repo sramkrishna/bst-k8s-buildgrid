@@ -1,0 +1,12 @@
+# Argo's own bst client cache — separate from the fish-helper Job PVC so
+# they can run concurrently. Same size, same StorageClass.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: bst-workflow-cache
+  namespace: buildgrid
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 100Gi

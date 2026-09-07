@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: database
+  namespace: buildgrid
+spec:
+  clusterIP: None
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+      name: postgres

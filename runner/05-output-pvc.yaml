@@ -1,0 +1,22 @@
+# Persistent PVC for build outputs (ISOs, OCI trees, etc.) so they
+# survive Job completion. Runner Jobs mount this at /output, one build's
+# output at a time (RWO). To grab an output:
+#
+#   # From any Job pod that's still around, or from a debug pod that mounts it:
+#   kubectl -n buildgrid run grab --rm -it --restart=Never \
+#       --image=busybox --overrides='
+#       {"spec":{
+#         "containers":[{"name":"grab","image":"busybox","command":["sh","-c","ls -la /output/artifact && sleep 3600"],"volumeMounts":[{"name":"o","mountPath":"/output"}]}],
+#         "volumes":[{"name":"o","persistentVolumeClaim":{"claimName":"bst-runner-output"}}]}}'
+#   # Then in another shell:
+#   kubectl -n buildgrid cp grab:/output/artifact/disk.iso ./
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: bst-runner-output
+  namespace: buildgrid
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 50Gi

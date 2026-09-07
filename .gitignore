@@ -1,0 +1,30 @@
+# Real secret manifests — templates live in `*.example.yaml` alongside.
+# When contributing, extend this list whenever you add another secret.
+k8s/10-postgres-secret.yaml
+runner/07-minio-secret.yaml
+monitoring/40-grafana-secret.yaml
+
+# Generic "just in case" guards. If someone drops a file named e.g.
+# `foo-secret.yaml` or `credentials.env` we don't want it silently committed.
+*-secret.yaml
+!*-secret.example.yaml
+*.env
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.*
+kubeconfig
+.kube/
+
+# Editor / OS junk
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Local scratch outputs
+scratchpad/
+/tmp-*/
+*.log

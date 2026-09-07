@@ -1,0 +1,19 @@
+# Example one-shot Workflow that invokes the `gnome-build` template
+# with the smoke-test target. Apply with:
+#
+#   kubectl -n buildgrid create -f argo/example-smoke-workflow.yaml
+#
+# `generateName` (not `name`) so k8s appends a random suffix and each
+# invocation gets a unique workflow — you can fire it repeatedly.
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: smoke-
+  namespace: buildgrid
+spec:
+  workflowTemplateRef:
+    name: gnome-build
+  arguments:
+    parameters:
+      - name: target
+        value: freedesktop-sdk.bst:components/git.bst

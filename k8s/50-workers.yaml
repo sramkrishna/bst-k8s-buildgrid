@@ -1,0 +1,78 @@
+# Workers — one pod per concurrent action slot.
+# Two containers, sharing a UNIX socket via emptyDir:
+#   - local-casd: proxies BuildGrid's CAS; provides LocalCAS StageTree
+#     which the worker needs (BuildGrid's !cas is plain REAPI, no StageTree).
+#   - worker: buildbox-worker with bubblewrap runner.
+#
+# --runner-arg=--staging-mode=copy-or-link is the critical bit — the
+# default (FUSE) does not work in a k8s pod, dies with exit 2. copy-or-link
+# stages via hardlinks/copies with no FUSE dependency.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: buildgrid
+spec:
+  replicas: 48                    # battle-station mode — saturate 4 hosts
+  selector:
+    matchLabels:
+      app: worker
+  template:
+    metadata:
+      labels:
+        app: worker
+    spec:
+      # Prefer to spread worker pods across nodes rather than piling them all
+      # on one. Preferred (not required) so the deploy still schedules when
+      # nodes fill up.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels: { app: worker }
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: local-casd
+          image: registry.gitlab.com/buildgrid/buildgrid.hub.docker.com/buildbox:nightly
+          imagePullPolicy: IfNotPresent
+          command: ["buildbox-casd"]
+          args:
+            # Full proxy — CAS, Action Cache, Execution, Remote Asset.
+            # gbm actions use recc via the mounted /tmp/casd.sock, which
+            # can submit nested Executes or AC lookups — need upstreams
+            # for all of these, not just CAS.
+            - --cas-remote=http://buildgrid:50051
+            - --ac-remote=http://buildgrid:50051
+            - --exec-remote=http://buildgrid:50051
+            - /var/lib/buildgrid/cache
+          volumeMounts:
+            - name: cache
+              mountPath: /var/lib/buildgrid/cache
+        - name: worker
+          image: registry.gitlab.com/buildgrid/buildgrid.hub.docker.com/buildbox:nightly
+          imagePullPolicy: IfNotPresent
+          command: ["buildbox-worker"]
+          args:
+            - --buildbox-run=/usr/local/bin/buildbox-run-bubblewrap
+            - --cas-remote=unix:/var/lib/buildgrid/cache/casd.sock
+            - --bots-remote=http://buildgrid:50051
+            - --platform=OSFamily=linux
+            - --platform=ISA=x86-64
+            # No --request-timeout — default is unlimited. 30 s is fine for
+            # a CI smoke test, but big GNOME OS actions (filesystem
+            # integration, dracut, etc.) blow through it.
+            - --runner-arg=--staging-mode=copy-or-link
+            - --verbose
+          securityContext:
+            privileged: true      # bwrap needs it; upstream reference does same
+          volumeMounts:
+            - name: cache
+              mountPath: /var/lib/buildgrid/cache
+      volumes:
+        - name: cache
+          emptyDir:
+            # Big — a single GNOME OS action's input tree (base runtime + deps)
+            # easily exceeds 5 Gi. Kubelet evicts the pod if this limit is hit.
+            sizeLimit: 50Gi

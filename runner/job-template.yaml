@@ -1,0 +1,135 @@
+# Template for a bst build Job. Substitute:
+#   GIT_URL     — repo to clone
+#   GIT_REF     — branch/tag/commit
+#   BST_TARGET  — element to build (e.g. gnomeos/live-image.bst)
+#   JOB_NAME    — a suffix, e.g. gnome-os-<sha>
+#
+# Example (fish):
+#   set -x GIT_URL https://gitlab.gnome.org/GNOME/gnome-build-meta.git
+#   set -x GIT_REF master
+#   set -x BST_TARGET gnomeos/live-image.bst
+#   set -x JOB_NAME gnome-os-$(date +%s)
+#   envsubst < job-template.yaml | kubectl apply -f -
+#
+# Then watch: kubectl -n buildgrid logs -f -l job-name=bst-build-$JOB_NAME
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: bst-build-${JOB_NAME}
+  namespace: buildgrid
+  labels:
+    app: bst-runner
+spec:
+  ttlSecondsAfterFinished: 86400        # keep logs 1 day after completion
+  backoffLimit: 0                       # no auto-retry — you re-fire manually
+  template:
+    metadata:
+      labels:
+        app: bst-runner
+        job-name: bst-build-${JOB_NAME}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: bst
+          image: fast-sfp1:30500/bst-runner:v6
+          # Always pull while iterating on the runner image. Flip back to
+          # IfNotPresent once the image is stable.
+          imagePullPolicy: Always
+          resources:
+            requests:
+              memory: "4Gi"
+              cpu: "2"
+            limits:
+              # Big — casd builds Merkle trees for all gnome-build-meta
+              # sources in memory. Segfaults have been observed at lower caps.
+              memory: "16Gi"
+              cpu: "8"
+          # Privileged — bst client-side runs bwrap for "Integrating sandbox"
+          # steps (post-build integration commands like update-ca-trust etc.)
+          # even under remote execution. bwrap needs CAP_SYS_ADMIN to mount
+          # /proc. Same reason the workers run privileged.
+          securityContext:
+            privileged: true
+          command: ["/bin/bash", "-euxo", "pipefail", "-c"]
+          args:
+            - |
+              # 1. Fresh clone of the project
+              git clone --depth=1 --branch "${GIT_REF}" "${GIT_URL}" /work/project
+              cd /work/project
+
+              # 2. Any project-specific pre-build (gnome-build-meta needs
+              #    snakeoil boot keys for testing).
+              if [ -d files/boot-keys ]; then
+                make -C files/boot-keys IMPORT_MODE=snakeoil
+              fi
+
+              # 3. The build
+              /usr/bin/time -v bst build "${BST_TARGET}"
+
+              # 4. Checkout — clean first so PVC-shared /output doesn't clash
+              # with a previous run's contents.
+              rm -rf /output/artifact
+              bst artifact checkout "${BST_TARGET}" --no-integrate --directory /output/artifact
+              ls -la /output/artifact
+
+              # 5. Compress any .iso files with xz for distribution.
+              find /output/artifact -maxdepth 1 -type f -name '*.iso' -print0 |
+                while IFS= read -r -d '' iso; do
+                  echo "Compressing $iso …"
+                  /usr/bin/time -v xz -T0 -9 --keep "$iso"
+                  sha256sum "$iso" "$iso.xz" > "$iso.xz.sha256"
+                  ls -la "$iso" "$iso.xz" "$iso.xz.sha256"
+                done
+
+              # 6. Upload artifacts to MinIO — persists after the Job ends,
+              # gets you a stable URL you can share / link from a release.
+              # mc is a small static Go binary — grab it inline (image-agnostic).
+              curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc \
+                -o /usr/local/bin/mc && chmod +x /usr/local/bin/mc
+              mc alias set local http://minio.buildgrid.svc.cluster.local:9000 \
+                "${MINIO_USER}" "${MINIO_PASS}"
+              PREFIX="${JOB_PREFIX:-runs/${JOB_NAME_SLUG:-manual}-$(date +%Y%m%dT%H%M%SZ)}"
+              mc mirror --overwrite --remove /output/artifact/ "local/artifacts/${PREFIX}/"
+              echo
+              echo "=================================================="
+              echo "  UPLOADED to MinIO under: artifacts/${PREFIX}/"
+              echo "  List:"
+              mc ls "local/artifacts/${PREFIX}/"
+              echo
+              echo "  Public URLs (via NodePort 30900):"
+              mc ls "local/artifacts/${PREFIX}/" | awk '{print $NF}' | while read f; do
+                echo "    http://<any-node-ip>:30900/artifacts/${PREFIX}/${f}"
+              done
+              echo "=================================================="
+          env:
+            - name: GIT_URL
+              value: "${GIT_URL}"
+            - name: GIT_REF
+              value: "${GIT_REF}"
+            - name: BST_TARGET
+              value: "${BST_TARGET}"
+            - name: JOB_NAME_SLUG
+              value: "${JOB_NAME}"
+            - name: MINIO_USER
+              valueFrom: { secretKeyRef: { name: minio-root, key: MINIO_ROOT_USER } }
+            - name: MINIO_PASS
+              valueFrom: { secretKeyRef: { name: minio-root, key: MINIO_ROOT_PASSWORD } }
+          volumeMounts:
+            - name: cache
+              mountPath: /cache
+            - name: config
+              mountPath: /config/buildstream
+            - name: output
+              mountPath: /output
+      volumes:
+        - name: cache
+          persistentVolumeClaim:
+            claimName: bst-runner-cache
+        - name: config
+          configMap:
+            name: bst-runner-config
+        - name: output
+          persistentVolumeClaim:
+            # Persists after Job completion — grab via a debug pod that
+            # mounts the same PVC. See runner/05-output-pvc.yaml comments.
+            claimName: bst-runner-output

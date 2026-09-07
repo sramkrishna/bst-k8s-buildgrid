@@ -1,0 +1,22 @@
+# One-shot: applies BuildGrid's alembic migrations to postgres.
+# Idempotent — no-ops on repeat runs.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: buildgrid-migrate
+  namespace: buildgrid
+spec:
+  ttlSecondsAfterFinished: 3600
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: migrate
+          image: registry.gitlab.com/buildgrid/buildgrid.hub.docker.com/buildgrid:nightly
+          imagePullPolicy: IfNotPresent
+          command: ["bgd"]
+          args:
+            - migrate
+            - apply
+            - postgresql://bgd:insecure@database/bgd

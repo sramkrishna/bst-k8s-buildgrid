@@ -1,0 +1,198 @@
+# Reusable WorkflowTemplate for a gnome-build-meta build.
+# Adapted from projectbluefin/lab's dakota-build-pipeline, retargeted at
+# our BuildGrid backend + our custom bst-runner image + MinIO for artifacts.
+#
+# Invoke with (from CLI):
+#   argo -n buildgrid submit --from workflowtemplate/gnome-build \
+#        -p target=gnomeos/live-image.bst \
+#        -p ref=master
+#
+# Or via kubectl (no argo CLI needed):
+#   kubectl -n buildgrid create -f - <<EOF
+#   apiVersion: argoproj.io/v1alpha1
+#   kind: Workflow
+#   metadata:
+#     generateName: gnome-build-
+#   spec:
+#     workflowTemplateRef: { name: gnome-build }
+#     arguments:
+#       parameters:
+#         - { name: target, value: gnomeos/live-image.bst }
+#         - { name: ref,    value: master }
+#   EOF
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: gnome-build
+  namespace: buildgrid
+spec:
+  serviceAccountName: workflow
+  entrypoint: build
+  activeDeadlineSeconds: 21600            # 6 h ceiling
+  ttlStrategy:
+    secondsAfterCompletion: 86400         # keep 24h for post-mortems
+  arguments:
+    parameters:
+      - name: repo
+        value: "https://gitlab.gnome.org/GNOME/gnome-build-meta.git"
+      - name: ref
+        value: "master"
+      - name: target
+        value: "gnomeos/live-image.bst"
+      - name: runner-image
+        value: "fast-sfp1:30500/bst-runner:v6"
+      - name: minio-endpoint
+        value: "http://minio.buildgrid.svc.cluster.local:9000"
+      - name: bucket
+        value: "artifacts"
+
+  # Optional: only one build at a time, cluster-wide.
+  # Requires configmap `workflow-semaphores` — see comments at bottom.
+  # synchronization:
+  #   semaphore:
+  #     configMapKeyRef:
+  #       name: workflow-semaphores
+  #       key: bst-build
+
+  # Notifications are fired from brigid via a systemd --user unit
+  # (bst-wf-watcher.service) — the cluster can't reach brigid's Tailscale IP,
+  # so in-workflow ntfy would just burn 2 minutes on a TCP timeout.
+
+  templates:
+    # --- Entry point: linear pipeline (clone → build → checkout → upload) ---
+    - name: build
+      inputs:
+        parameters:
+          - { name: repo,           value: "{{workflow.parameters.repo}}" }
+          - { name: ref,            value: "{{workflow.parameters.ref}}" }
+          - { name: target,         value: "{{workflow.parameters.target}}" }
+          - { name: runner-image,   value: "{{workflow.parameters.runner-image}}" }
+          - { name: minio-endpoint, value: "{{workflow.parameters.minio-endpoint}}" }
+          - { name: bucket,         value: "{{workflow.parameters.bucket}}" }
+      steps:
+        - - name: run
+            template: bst-run
+            arguments:
+              parameters:
+                - { name: repo,           value: "{{inputs.parameters.repo}}" }
+                - { name: ref,            value: "{{inputs.parameters.ref}}" }
+                - { name: target,         value: "{{inputs.parameters.target}}" }
+                - { name: runner-image,   value: "{{inputs.parameters.runner-image}}" }
+                - { name: minio-endpoint, value: "{{inputs.parameters.minio-endpoint}}" }
+                - { name: bucket,         value: "{{inputs.parameters.bucket}}" }
+
+    # --- The actual build pod. Same shape as our runner Job. ---
+    - name: bst-run
+      inputs:
+        parameters:
+          - name: repo
+          - name: ref
+          - name: target
+          - name: runner-image
+          - name: minio-endpoint
+          - name: bucket
+      metadata:
+        labels:
+          app: bst-runner
+      script:
+        image: "{{inputs.parameters.runner-image}}"
+        imagePullPolicy: Always
+        securityContext:
+          privileged: true          # bwrap + client-side integration steps
+        resources:
+          # Memory limit needs enough headroom for:
+          #   - bst client + local casd staging the artifact tree
+          #   - xz compression of the ISO (see step 5 below)
+          # A 16 GiB cap OOMKilled the runner on gnome-os/live-image because
+          # `xz -T0 -9` alone wants ~674 MiB × N-cores.
+          requests: { memory: 8Gi,  cpu: "2" }
+          limits:   { memory: 48Gi, cpu: "8" }
+        env:
+          - { name: XDG_CACHE_HOME,  value: /cache }
+          - { name: XDG_CONFIG_HOME, value: /config }
+          - name: MINIO_USER
+            valueFrom: { secretKeyRef: { name: minio-root, key: MINIO_ROOT_USER } }
+          - name: MINIO_PASS
+            valueFrom: { secretKeyRef: { name: minio-root, key: MINIO_ROOT_PASSWORD } }
+          - name: MINIO_ENDPOINT
+            value: "{{inputs.parameters.minio-endpoint}}"
+          - name: BUCKET
+            value: "{{inputs.parameters.bucket}}"
+          - name: GIT_URL
+            value: "{{inputs.parameters.repo}}"
+          - name: GIT_REF
+            value: "{{inputs.parameters.ref}}"
+          - name: BST_TARGET
+            value: "{{inputs.parameters.target}}"
+          - name: WF_NAME
+            value: "{{workflow.name}}"
+        volumeMounts:
+          - { name: cache,  mountPath: /cache }
+          - { name: config, mountPath: /config/buildstream }
+          - { name: output, mountPath: /output }
+        command: [bash, -euxo, pipefail, -c]
+        source: |
+          # 1. Clone
+          git clone --depth=1 --branch "${GIT_REF}" "${GIT_URL}" /work/project
+          cd /work/project
+
+          # 2. Snakeoil keys if the project has them
+          if [ -d files/boot-keys ]; then
+            make -C files/boot-keys IMPORT_MODE=snakeoil
+          fi
+
+          # 3. Build
+          /usr/bin/time -v bst build "${BST_TARGET}"
+
+          # 4. Checkout — clean prior contents first (PVC is shared/reused).
+          rm -rf /output/artifact
+          bst artifact checkout "${BST_TARGET}" --no-integrate \
+            --directory /output/artifact
+          ls -la /output/artifact
+
+          # 5. Sha256 the ISOs for integrity — no xz. Compression saves ~30%
+          # bandwidth but costs 3-4 min of build time + a lot of memory, and
+          # nobody's paying for the bytes here. Add xz back if there's ever
+          # a distribution channel that actually needs it.
+          find /output/artifact -maxdepth 1 -type f -name '*.iso' -print0 |
+            while IFS= read -r -d '' iso; do
+              sha256sum "$iso" > "$iso.sha256"
+            done
+
+          # 6. Upload to MinIO
+          curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc \
+            -o /usr/local/bin/mc && chmod +x /usr/local/bin/mc
+          mc alias set local "${MINIO_ENDPOINT}" "${MINIO_USER}" "${MINIO_PASS}"
+          PREFIX="runs/${WF_NAME}"
+          mc mirror --overwrite /output/artifact/ "local/${BUCKET}/${PREFIX}/"
+
+          # 7. Report the URL prefix (Argo exports outputs.parameters)
+          echo -n "${PREFIX}" > /tmp/prefix
+      outputs:
+        parameters:
+          - name: prefix
+            valueFrom:
+              path: /tmp/prefix
+      volumes:
+        # Argo uses its OWN cache PVC (bst-workflow-cache) so it can run
+        # concurrently with fish-helper Jobs (which own bst-runner-cache).
+        - name: cache
+          persistentVolumeClaim: { claimName: bst-workflow-cache }
+        - name: config
+          configMap: { name: bst-runner-config }
+        # Output shared with fish-helper Jobs — MinIO is the durable store
+        # anyway, PVC just gates the "compress + upload" step.
+        - name: output
+          persistentVolumeClaim: { claimName: bst-runner-output }
+
+# ---------------------------------------------------------------------------
+# Optional semaphore setup — apply if you want cluster-wide "one bst build
+# at a time" (Bluefin's pattern). Uncomment the `synchronization:` block
+# above, and apply:
+#
+#   apiVersion: v1
+#   kind: ConfigMap
+#   metadata: { name: workflow-semaphores, namespace: buildgrid }
+#   data:
+#     bst-build: "1"
+# ---------------------------------------------------------------------------

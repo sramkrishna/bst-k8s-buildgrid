@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bst-runner-config
+  namespace: buildgrid
+data:
+  buildstream2.conf: |
+    cache:
+      storage-service:
+        url: http://buildgrid.buildgrid.svc.cluster.local:50051
+
+    remote-execution:
+      execution-service:
+        url: http://buildgrid.buildgrid.svc.cluster.local:50051
+      storage-service:
+        url: http://buildgrid.buildgrid.svc.cluster.local:50051
+      action-cache-service:
+        url: http://buildgrid.buildgrid.svc.cluster.local:50051
