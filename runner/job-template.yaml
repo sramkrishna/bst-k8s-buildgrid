@@ -53,9 +53,15 @@ spec:
           command: ["/bin/bash", "-euxo", "pipefail", "-c"]
           args:
             - |
-              # 1. Fresh clone of the project
-              git clone --depth=1 --branch "${GIT_REF}" "${GIT_URL}" /work/project
-              cd /work/project
+              # 1. Fetch a single ref. Using `git init` + `git fetch` (instead
+              # of `git clone --branch`) so `${GIT_REF}` accepts branches,
+              # tags, commit SHAs, AND full ref paths like GitLab MR refs
+              # (`refs/merge-requests/<N>/head` or `/merge`).
+              mkdir -p /work/project && cd /work/project
+              git init -q
+              git remote add origin "${GIT_URL}"
+              git fetch --depth=1 origin "${GIT_REF}"
+              git checkout -q FETCH_HEAD
 
               # 2. Any project-specific pre-build (gnome-build-meta needs
               #    snakeoil boot keys for testing).

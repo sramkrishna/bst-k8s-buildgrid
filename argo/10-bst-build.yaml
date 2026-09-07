@@ -132,9 +132,16 @@ spec:
           - { name: output, mountPath: /output }
         command: [bash, -euxo, pipefail, -c]
         source: |
-          # 1. Clone
-          git clone --depth=1 --branch "${GIT_REF}" "${GIT_URL}" /work/project
-          cd /work/project
+          # 1. Fetch a single ref. Using `git init` + `git fetch` (instead of
+          # `git clone --branch`) so `${GIT_REF}` accepts branches, tags,
+          # commit SHAs, AND full ref paths like GitLab merge-request refs
+          # (`refs/merge-requests/<N>/head`) or `/merge` for the pre-computed
+          # merge result. `--depth=1` keeps the fetch cheap.
+          mkdir -p /work/project && cd /work/project
+          git init -q
+          git remote add origin "${GIT_URL}"
+          git fetch --depth=1 origin "${GIT_REF}"
+          git checkout -q FETCH_HEAD
 
           # 2. Snakeoil keys if the project has them
           if [ -d files/boot-keys ]; then
