@@ -132,6 +132,14 @@ spec:
           - { name: output, mountPath: /output }
         command: [bash, -euxo, pipefail, -c]
         source: |
+          # Belt-and-suspenders: Argo's script-template invocation doesn't
+          # always propagate the outer shell's `-euxo pipefail` flags to the
+          # script child, so a `bst build` failure would let the rest of the
+          # script continue and the workflow would be marked Succeeded even
+          # though nothing was built. Setting the flags here in-source
+          # guarantees they're active regardless.
+          set -euxo pipefail
+
           # 1. Fetch a single ref. Using `git init` + `git fetch` (instead of
           # `git clone --branch`) so `${GIT_REF}` accepts branches, tags,
           # commit SHAs, AND full ref paths like GitLab merge-request refs
