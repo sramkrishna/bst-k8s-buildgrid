@@ -40,7 +40,7 @@ spec:
       - { name: target, value: "" }
       # Infrastructure defaults — usually fine to leave as-is.
       - name: runner-image
-        value: "fast-sfp1:30500/bst-runner:v6"
+        value: "fast-sfp1:30500/bst-runner:v7"
       - name: minio-endpoint
         value: "http://minio.buildgrid.svc.cluster.local:9000"
       - name: bucket
@@ -174,9 +174,9 @@ spec:
               sha256sum "$iso" > "$iso.sha256"
             done
 
-          # 6. Upload to MinIO
-          curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc \
-            -o /usr/local/bin/mc && chmod +x /usr/local/bin/mc
+          # 6. Upload to MinIO. `mc` is baked into the bst-runner image
+          # since v7 (prior versions downloaded it at runtime, which broke
+          # when MinIO retired dl.min.io/client/mc/release/linux-amd64/mc).
           mc alias set local "${MINIO_ENDPOINT}" "${MINIO_USER}" "${MINIO_PASS}"
           PREFIX="runs/${WF_NAME}"
           mc mirror --overwrite /output/artifact/ "local/${BUCKET}/${PREFIX}/"
@@ -189,16 +189,31 @@ spec:
             valueFrom:
               path: /tmp/prefix
       volumes:
-        # Argo uses its OWN cache PVC (bst-workflow-cache) so it can run
-        # concurrently with fish-helper Jobs (which own bst-runner-cache).
+        # Both `cache` and `output` are emptyDir, not PVC.
+        #
+        # Previously these were RWO PVCs (`bst-workflow-cache`,
+        # `bst-runner-output`), which effectively serialized all Argo
+        # workflows — only one pod could mount an RWO PVC at a time. That
+        # was fine for one build but blocks parallelism entirely.
+        #
+        # The actual build-cache that matters is BuildGrid's CAS (shared
+        # cluster-wide, speaks REAPI). The bst client's local `/cache` is
+        # mostly a project-state scratch dir, and `/output` is a staging
+        # path before `mc mirror` ships artifacts to MinIO — both are
+        # throwaway per-run. emptyDir gives each workflow its own copy,
+        # cold-per-run for client state, but the hot CAS still provides
+        # massive cross-workflow reuse (Dakota reads GNOME OS artifacts
+        # from CAS, etc.).
+        #
+        # Downside: node must have enough ephemeral storage for the
+        # sizeLimits below × concurrent workflows on that node. We expanded
+        # sfp1's root FS to 588GiB precisely so this isn't a constraint.
         - name: cache
-          persistentVolumeClaim: { claimName: bst-workflow-cache }
+          emptyDir: { sizeLimit: 100Gi }
         - name: config
           configMap: { name: bst-runner-config }
-        # Output shared with fish-helper Jobs — MinIO is the durable store
-        # anyway, PVC just gates the "compress + upload" step.
         - name: output
-          persistentVolumeClaim: { claimName: bst-runner-output }
+          emptyDir: { sizeLimit: 50Gi }
 
 # ---------------------------------------------------------------------------
 # Optional semaphore setup — apply if you want cluster-wide "one bst build

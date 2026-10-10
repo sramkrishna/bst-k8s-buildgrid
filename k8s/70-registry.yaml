@@ -4,8 +4,8 @@
 # a homelab, wrap in TLS + auth if you expose it outside your LAN.
 #
 # Push flow (on any workstation with podman/docker + registry-in-PATH):
-#   podman build -t fast-sfp1:30500/bst-runner:v6 runner/
-#   podman push  fast-sfp1:30500/bst-runner:v6
+#   podman build -t fast-sfp1:30500/bst-runner:v7 runner/
+#   podman push  fast-sfp1:30500/bst-runner:v7
 # then re-`kubectl apply` any Deployment that references that tag, or
 # `kubectl rollout restart` to make pods pick it up.
 apiVersion: v1

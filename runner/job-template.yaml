@@ -31,7 +31,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: bst
-          image: fast-sfp1:30500/bst-runner:v6
+          image: fast-sfp1:30500/bst-runner:v7
           # Always pull while iterating on the runner image. Flip back to
           # IfNotPresent once the image is stable.
           imagePullPolicy: Always
@@ -90,8 +90,8 @@ spec:
               # 6. Upload artifacts to MinIO — persists after the Job ends,
               # gets you a stable URL you can share / link from a release.
               # mc is a small static Go binary — grab it inline (image-agnostic).
-              curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc \
-                -o /usr/local/bin/mc && chmod +x /usr/local/bin/mc
+              # `mc` is baked into bst-runner:v7+. Previously fetched at
+              # runtime from dl.min.io, which went 410 Gone in Oct 2026.
               mc alias set local http://minio.buildgrid.svc.cluster.local:9000 \
                 "${MINIO_USER}" "${MINIO_PASS}"
               PREFIX="${JOB_PREFIX:-runs/${JOB_NAME_SLUG:-manual}-$(date +%Y%m%dT%H%M%SZ)}"

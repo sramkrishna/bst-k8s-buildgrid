@@ -337,7 +337,7 @@ For when you tear it all down and want to put it back:
 4. BuildGrid: `20-buildgrid-config.yaml`, `40-buildgrid.yaml`
 5. Workers: `50-workers.yaml` (needs `privileged: true` in cluster PSP/PSA)
 6. MinIO: `runner/07-minio.yaml`
-7. bst-runner image: `podman build -t fast-sfp1:30500/bst-runner:v6 runner/` + push
+7. bst-runner image: `podman build -t fast-sfp1:30500/bst-runner:v7 runner/` + push
 8. Argo: install from official manifest, then apply `argo/00-rbac.yaml`, `argo/05-cache-pvc.yaml`, `argo/10-bst-build.yaml`. Then apply per-project workflows from `gnome/`, `dakota/`, etc. as needed.
 9. Monitoring: `helm install monitoring prometheus-community/kube-prometheus-stack -n monitoring --create-namespace`
 10. Watcher: copy `~/.local/bin/bst-wf-watcher` + `~/.config/systemd/user/bst-wf-watcher.service`, then `systemctl --user enable --now bst-wf-watcher`

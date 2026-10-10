@@ -46,6 +46,20 @@ ENV PATH="/root/.local/bin:${PATH}" \
 RUN find /root/.local/share/pipx/venvs -name buildbox-fuse -delete && \
     ! bst --version 2>&1 | grep -qi 'no such'  # sanity
 
+# Bake in the MinIO client (`mc`). Previously the Argo workflow downloaded
+# this at runtime from dl.min.io, but as of Oct 2026 **MinIO archived the
+# open-source `mc` project** and retired all dl.min.io/client/mc/* paths
+# (returns 410 Gone). Binary artifacts are still published on GitHub
+# Releases though.
+#
+# Pinning to a specific release here (last stable before archival) so this
+# stays reproducible even if GitHub release layout ever shifts.
+ARG MC_RELEASE=RELEASE.2025-08-13T08-35-41Z
+RUN curl -fsSL -o /usr/local/bin/mc \
+      "https://github.com/minio/mc/releases/download/${MC_RELEASE}/mc.linux-amd64.${MC_RELEASE}" \
+ && chmod +x /usr/local/bin/mc \
+ && mc --version | head -1
+
 # Sanity — fail the build if bst can't run
 RUN bst --version
 
